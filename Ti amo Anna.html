@@ -1,0 +1,447 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Ti amo Anna</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one full-height stage; the whole scene is a character grid painted on a canvas. */
+:root {
+  --bg: #0a0c1e;
+  --fg: #ffd9e8;
+  --accent: #ff7aa8;
+  --accent-soft: #3a2140;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+  color-scheme: dark;
+}
+html { height: 100%; box-sizing: border-box; }
+body {
+  margin: 0;
+  height: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+#stage { position: relative; width: 100%; max-width: 640px; height: 100%; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#replay {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  font: 600 14px/1 var(--mono);
+  color: var(--fg);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 12px 22px;
+  min-height: 44px;
+  cursor: pointer;
+}
+#replay:focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
+#replay:active { background: var(--accent); color: var(--bg); }
+</style>
+
+<div id="stage">
+  <canvas id="c" role="img" aria-label="Un elefantino cammina fino a una cassa, la apre e ne escono cuori e la scritta ti amo Anna"></canvas>
+  <button id="replay" type="button" hidden>Rivedi &#9829;</button>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var TAU = Math.PI * 2, GOLDA = Math.PI * (3 - Math.sqrt(5));
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function lerp(a, b, w) { return a + (b - a) * w; }
+  function sm(u) { u = clamp(u, 0, 1); return u * u * (3 - 2 * u); }
+  function hr(n) { var s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); }
+
+  /* ---------- colour palettes (hsl ramps, dark -> light) ---------- */
+  var COL = [];
+  function mkPal(h, s, l0, l1, n) {
+    var base = COL.length;
+    for (var i = 0; i < n; i++) COL.push('hsl(' + h + ' ' + s + '% ' + (l0 + (l1 - l0) * i / (n - 1)).toFixed(1) + '%)');
+    return { base: base, n: n };
+  }
+  var M = { BODY: 0, PINK: 1, EYE: 2, WOOD: 3, GOLD: 4, GLOW: 5, GROUND: 6, GRASS: 7, HEART: 8, WHITE: 9, BGG: 10, GLOWP: 11 };
+  var PALS = [
+    mkPal(224, 48, 24, 86, 12), mkPal(335, 75, 30, 86, 10), mkPal(235, 35, 8, 20, 4),
+    mkPal(24, 58, 20, 60, 10), mkPal(44, 92, 32, 76, 10), mkPal(48, 100, 55, 92, 8),
+    mkPal(150, 35, 13, 34, 8), mkPal(130, 45, 20, 46, 8), mkPal(348, 85, 50, 74, 6),
+    mkPal(210, 30, 60, 95, 6), mkPal(135, 40, 12, 32, 8), mkPal(335, 100, 62, 90, 6)
+  ];
+  var BGF = [mkPal(210, 20, 24, 68, 8), mkPal(335, 60, 22, 60, 8), mkPal(350, 70, 20, 50, 8),
+             mkPal(275, 50, 22, 60, 8), mkPal(48, 80, 24, 60, 8), mkPal(26, 80, 22, 56, 8)];
+  var BGC = mkPal(40, 70, 20, 50, 6);
+  var BGHEART = mkPal(345, 60, 22, 46, 6);
+  var SPARK = mkPal(300, 40, 50, 96, 6);
+  var MSGN = 14, MSG = (function () { var base = COL.length; for (var i = 0; i < MSGN; i++) COL.push('hsl(' + (335 + 45 * Math.sin(i / MSGN * TAU) * 0.5 + 22) + ' 95% ' + (66 + 12 * Math.cos(i / MSGN * TAU)) + '%)'); return base; })();
+  var DISC = [[13, 0], [8, 1], [6, 2], [7, 3], [12, 4], [9, 5]];
+
+  var SHADE = '.:-=+*%@', SH_N = SHADE.length;
+  var LX = -0.45, LY = 0.6, LZ = 0.66, ln = Math.sqrt(LX * LX + LY * LY + LZ * LZ); LX /= ln; LY /= ln; LZ /= ln;
+  var HEART = 9829, BLOCK = 9608;
+
+  /* ---------- timeline (seconds) ---------- */
+  var T_WALK = 6.0, T_TAP0 = 6.6, T_TAP1 = 8.8, T_OPEN = 9.4, T_TEXT = T_OPEN + 0.8, T_DONE = T_OPEN + 4.6;
+  var X_START = -3.5, X_STOP = -0.55, CHEST_X = 1.45;
+
+  /* ---------- point buffer ---------- */
+  var MAXP = 14000, F = 10, P = new Float32Array(MAXP * F), np = 0;
+  function add(x, y, z, nx, ny, nz, mat, tone, two, ch) {
+    if (np >= MAXP) return;
+    var o = np * F;
+    P[o] = x; P[o + 1] = y; P[o + 2] = z; P[o + 3] = nx; P[o + 4] = ny; P[o + 5] = nz;
+    P[o + 6] = mat; P[o + 7] = tone; P[o + 8] = two; P[o + 9] = ch; np++;
+  }
+  function ell(cx, cy, cz, rx, ry, rz, n, mat, tone, two, ch) {
+    for (var i = 0; i < n; i++) {
+      var y = 1 - 2 * (i + 0.5) / n, r = Math.sqrt(1 - y * y), th = i * GOLDA;
+      var dx = r * Math.cos(th), dz = r * Math.sin(th);
+      var nx = dx / rx, ny = y / ry, nz = dz / rz, m = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      add(cx + dx * rx, cy + y * ry, cz + dz * rz, nx / m, ny / m, nz / m, mat, tone, two, ch);
+    }
+  }
+
+  /* ---------- grid state ---------- */
+  var cols = 0, rows = 0, chars, colors, zbuf, sxs, sys, cxs, prow, textPix = [];
+  var ca, sa, ct, st;
+  var parts = [], bgHearts = [], burst = false, trickle = 0;
+
+  var GLYPH = {
+    T: ['#####', '..#..', '..#..', '..#..', '..#..'],
+    I: ['#####', '..#..', '..#..', '..#..', '#####'],
+    A: ['.###.', '#...#', '#####', '#...#', '#...#'],
+    M: ['#...#', '##.##', '#.#.#', '#...#', '#...#'],
+    O: ['.###.', '#...#', '#...#', '#...#', '.###.'],
+    N: ['#...#', '##..#', '#.#.#', '#..##', '#...#']
+  };
+
+  function setup(c, r) {
+    cols = c; rows = r;
+    chars = new Uint16Array(c * r); colors = new Int16Array(c * r); zbuf = new Float32Array(c * r);
+    sxs = Math.min(c / 4.0, r * 2 / 8.0); sys = sxs / 2; cxs = c / 2; prow = r * 0.68;
+    // text pixels
+    var sc = c >= 80 ? 2 : 1, lines = ['TI AMO', 'ANNA'], top = Math.max(2, Math.round(r * 0.08)), id = 0;
+    textPix = [];
+    for (var li = 0; li < lines.length; li++) {
+      var s = lines[li], widths = [], total = 0, k;
+      for (k = 0; k < s.length; k++) { var w = s[k] === ' ' ? 3 * sc : 5 * sc; widths.push(w); total += w + (k < s.length - 1 ? sc : 0); }
+      var x0 = Math.floor((c - total) / 2), cur = x0, y0 = top + li * 7;
+      for (k = 0; k < s.length; k++) {
+        var g = GLYPH[s[k]];
+        if (g) for (var gy = 0; gy < 5; gy++) for (var gx = 0; gx < 5; gx++) if (g[gy][gx] === '#')
+          for (var ix = 0; ix < sc; ix++) { textPix.push({ tx: cur + gx * sc + ix, ty: y0 + gy, d: hr(id * 3.1) * 1.8 }); id++; }
+        cur += widths[k] + sc;
+      }
+    }
+    bgHearts = [];
+    for (var h = 0; h < 16; h++) bgHearts.push({ x: hr(h * 5.3), y: hr(h * 2.1), sp: 0.03 + 0.05 * hr(h * 8.8), ph: hr(h) * 6.28, c: Math.floor(hr(h * 1.7) * 6) });
+    reset();
+  }
+  function reset() { parts = []; burst = false; trickle = 0; }
+
+  function plot(c, r, z, ch, ci) {
+    if (c < 0 || c >= cols || r < 0 || r >= rows) return;
+    var i = r * cols + c;
+    if (z > zbuf[i]) { zbuf[i] = z; chars[i] = ch; colors[i] = ci; }
+  }
+
+  /* ---------- states ---------- */
+  function elephantState(t) {
+    var u = Math.min(1, t / T_WALK);
+    var ex = X_START + (X_STOP - X_START) * (1 - (1 - u) * (1 - u));
+    var v = u < 1 ? (X_STOP - X_START) * 2 * (1 - u) / T_WALK : 0;
+    var amp = Math.min(1, v / 0.45), phase = ex * 3.2;
+    var a = -1.1 + 0.12 * Math.sin(phase), b = 0.05;
+    if (t > T_WALK - 0.8) { var w = sm((t - (T_WALK - 0.8)) / 1.4); a = lerp(a, -0.70, w); b = lerp(b, 0.03, w); }
+    if (t > T_TAP0 && t < T_TAP1) a = -0.70 - 0.18 * (1 - Math.abs(Math.cos((t - T_TAP0) * 4.2)));
+    var hw = sm((t - T_OPEN) / 0.9);
+    a = lerp(a, 0.95 + 0.08 * Math.sin(t * 6), hw); b = lerp(b, 0.045, hw);
+    var psi = lerp(0.42 + 0.1 * Math.sin(t * 2.2 + phase * 0.5), 0.65 + 0.4 * Math.sin(t * 9), hw);
+    var hop = hw > 0.5 ? 0.07 * Math.abs(Math.sin((t - T_OPEN) * 5)) * sm((t - T_OPEN - 0.8) / 0.6) : 0;
+    var bob = 0.025 * amp * Math.abs(Math.sin(phase)) + hop;
+    return { ex: ex, amp: amp, phase: phase, a: a, b: b, psi: psi, bob: bob };
+  }
+  function chestState(t) {
+    var shake = 0;
+    if (t > T_TAP0 && t < T_TAP1) shake = Math.pow(1 - Math.abs(Math.cos((t - T_TAP0) * 4.2)), 8) * 0.8;
+    else if (t >= T_TAP1 && t < T_OPEN) shake = 0.35 + 0.65 * clamp((t - T_TAP1) / 0.6, 0, 1);
+    var u = clamp((t - T_OPEN) / 1.0, 0, 1), c1 = 1.70158, c3 = c1 + 1;
+    var e = u <= 0 ? 0 : 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2);
+    return { shake: shake, alpha: 1.95 * e };
+  }
+
+  /* ---------- builders ---------- */
+  function buildElephant(s, t) {
+    var ox = s.ex, oy = s.bob, i, j;
+    ell(ox - 0.05, oy + 0.92, 0, 0.76, 0.56, 0.50, 1300, M.BODY, 0, 0, 0);
+    ell(ox + 0.95, oy + 1.25, 0, 0.46, 0.46, 0.43, 700, M.BODY, 0.06, 0, 0);
+    for (var sd = -1; sd <= 1; sd += 2) {
+      ell(ox + 1.26, oy + 1.10, sd * 0.33, 0.09, 0.07, 0.05, 34, M.PINK, 0.1, 0, 0);
+      ell(ox + 1.28, oy + 1.36, sd * 0.30, 0.065, 0.07, 0.06, 22, M.EYE, 0, 0, 64);
+      // ear
+      var cp = Math.cos(s.psi), sp = Math.sin(s.psi), hx = ox + 0.80, hy = oy + 1.40, hz = sd * 0.36;
+      for (i = -11; i <= 11; i++) for (j = -11; j <= 11; j++) {
+        var u = i / 11, v = j / 11, rr = u * u + v * v;
+        if (rr > 1) continue;
+        var lx = -0.42 * (1 + u), ly = 0.50 * v;
+        add(hx + lx * cp, hy + ly, hz + sd * (-lx) * sp + sd * 0.02, sp, 0, sd * cp, rr < 0.5 ? M.PINK : M.BODY, rr < 0.5 ? -0.04 : 0, 1, 0);
+      }
+    }
+    // legs
+    var legs = [[0.48, 0.30, 0], [-0.48, -0.30, 0], [0.48, -0.30, Math.PI], [-0.48, 0.30, Math.PI]];
+    for (var l = 0; l < 4; l++) {
+      var lg = legs[l], ph = s.phase + lg[2], sw = Math.sin(ph), lift = 0.12 * s.amp * Math.max(0, Math.cos(ph));
+      var hipY = oy + 0.66, hipX = ox + lg[0], fx = hipX + 0.30 * s.amp * sw, fy = 0.06 + lift;
+      for (var k = 0; k < 10; k++) {
+        var q = k / 9, cx2 = lerp(hipX, fx, q), cy2 = lerp(hipY, fy, q), rad = 0.21 - 0.02 * q;
+        for (var m = 0; m < 10; m++) { var a2 = m / 10 * TAU + k * 0.4; add(cx2 + Math.cos(a2) * rad, cy2, lg[1] + Math.sin(a2) * rad, Math.cos(a2), 0, Math.sin(a2), M.BODY, -0.04, 0, 0); }
+      }
+    }
+    // trunk
+    var px = ox + 1.36, py = oy + 1.15, L = 1.15 / 24;
+    for (i = 0; i < 24; i++) {
+      var th = s.a + s.b * i, dx = Math.cos(th), dy = Math.sin(th), r2 = 0.17 - 0.08 * i / 23;
+      for (j = 0; j < 12; j++) {
+        var pp = j / 12 * TAU, cc = Math.cos(pp), ss = Math.sin(pp);
+        add(px - dy * cc * r2, py + dx * cc * r2, ss * r2, -dy * cc, dx * cc, ss, M.BODY, 0.10, 0, 0);
+      }
+      px += dx * L; py += dy * L;
+    }
+    // tail
+    var sw2 = Math.sin(t * 3);
+    for (i = 0; i < 9; i++) { var u2 = i / 8; for (j = 0; j < 3; j++) { var a3 = j * 2.1; add(ox - 0.78 - 0.2 * u2 + Math.cos(a3) * 0.035, oy + 1.05 - 0.36 * u2, 0.16 * sw2 * u2 + Math.sin(a3) * 0.035, 0, 0, 1, M.BODY, -0.18, 0, 0); } }
+    ell(ox - 0.98, oy + 0.68, 0.16 * sw2, 0.06, 0.07, 0.06, 16, M.PINK, 0, 0, 0);
+  }
+
+  function buildChest(t, cs) {
+    var X = CHEST_X + cs.shake * 0.03 * Math.sin(t * 60), Z = cs.shake * 0.02 * Math.cos(t * 47);
+    var hx = 0.45, hz = 0.30, h = 0.52, st2 = 0.045, x, y, z;
+    for (x = -hx + st2 / 2; x < hx; x += st2) for (y = st2 / 2; y < h; y += st2) {
+      var gold = Math.abs(Math.abs(x) - 0.30) < 0.045, tone = (Math.floor(y / 0.13) % 2) ? -0.07 : 0.02;
+      add(X + x, y, Z + hz, 0, 0, 1, gold ? M.GOLD : M.WOOD, gold ? 0 : tone, 0, 0);
+      add(X + x, y, Z - hz, 0, 0, -1, gold ? M.GOLD : M.WOOD, gold ? 0 : tone, 0, 0);
+    }
+    for (z = -hz + st2 / 2; z < hz; z += st2) for (y = st2 / 2; y < h; y += st2) {
+      var tn = (Math.floor(y / 0.13) % 2) ? -0.07 : 0.02;
+      add(X + hx, y, Z + z, 1, 0, 0, M.WOOD, tn, 0, 0); add(X - hx, y, Z + z, -1, 0, 0, M.WOOD, tn, 0, 0);
+    }
+    for (x = -0.07; x <= 0.07; x += 0.03) for (y = 0.30; y <= 0.44; y += 0.03) add(X + x, y, Z + hz + 0.01, 0, 0, 1, M.GOLD, 0.15, 0, 0);
+    add(X, 0.36, Z + hz + 0.02, 0, 0, 1, M.EYE, 0, 0, 64);
+    // lid
+    var cA = Math.cos(cs.alpha), sA = Math.sin(cs.alpha);
+    function lid(xx, s, v, nx, nzp, nyp) {
+      var dz = 0.6 * s, dy = 0.18 * Math.sin(Math.PI * s) * v;
+      var wz = dz * cA - dy * sA, wy = dy * sA * 0 + dy * cA + dz * sA;
+      var rz = nzp * cA - nyp * sA, ry = nyp * cA + nzp * sA;
+      return [X + xx, h + wy, Z - hz + wz, nx, ry, rz];
+    }
+    for (var si = 0; si <= 20; si++) {
+      var s = si / 20, Ty = 0.18 * Math.PI * Math.cos(Math.PI * s), Tz = 0.6, nl = Math.sqrt(Ty * Ty + Tz * Tz);
+      var nz0 = -Ty / nl, ny0 = Tz / nl;
+      for (x = -hx; x <= hx + 0.001; x += 0.045) {
+        var g2 = Math.abs(Math.abs(x) - 0.30) < 0.045, q = lid(x, s, 1, 0, nz0, ny0);
+        add(q[0], q[1], q[2], q[3], q[4], q[5], g2 ? M.GOLD : M.WOOD, g2 ? 0 : 0.03, 1, 0);
+      }
+      for (var vi = 0; vi < 5; vi++) for (var sdd = -1; sdd <= 1; sdd += 2) {
+        var q2 = lid(sdd * hx, s, vi / 5, sdd, 0, 0);
+        add(q2[0], q2[1], q2[2], q2[3], q2[4], q2[5], M.WOOD, -0.04, 1, 0);
+      }
+    }
+    if (cs.alpha > 0.12) {
+      var n = 0;
+      for (x = -0.38; x <= 0.38; x += 0.06) for (z = -0.24; z <= 0.24; z += 0.06) { n++; add(X + x, 0.50, Z + z, 0, 1, 0, hr(n) > 0.5 ? M.GLOW : M.GLOWP, 0.35 + 0.25 * Math.sin(t * 8 + n), 0, 0); }
+    }
+    if (cs.alpha > 0.3) {
+      for (var k = 0; k < 50; k++) {
+        var yy = 0.55 + ((t * 0.9 + hr(k) * 3) % 2.0) * 1.2, fade = 1 - (yy - 0.55) / 2.4;
+        add(X + (hr(k + 30) - 0.5) * 0.55, yy, Z + (hr(k + 60) - 0.5) * 0.35, 0, 1, 0, M.GLOW, (fade - 1) * 0.6 + 0.2, 0, fade > 0.6 ? 42 : fade > 0.3 ? 43 : 46);
+      }
+    }
+  }
+
+  function buildGround(ex) {
+    var gx, gz, n = 0;
+    for (gx = -2.9; gx <= 2.9; gx += 0.24) for (gz = -1.3; gz <= 1.5; gz += 0.24) {
+      n++;
+      var jx = gx + (hr(n * 1.3) - 0.5) * 0.14, jz = gz + (hr(n * 2.9) - 0.5) * 0.14;
+      var de = (jx - ex) / 1.05, dz = jz / 0.55;
+      if (de * de + dz * dz < 1) continue;
+      if (Math.abs(jx - CHEST_X) < 0.55 && Math.abs(jz) < 0.38) continue;
+      add(jx, 0, jz, 0, 1, 0, M.GROUND, hr(n * 4.4) * 0.4 - 0.2, 0, hr(n * 6.1) < 0.2 ? 58 : 46);
+    }
+    for (var i = 0; i < 40; i++) {
+      var x = (hr(i * 3.7) - 0.5) * 5.4, z = (hr(i * 9.1) - 0.5) * 2.6;
+      var de2 = (x - ex) / 1.0, dz2 = z / 0.5;
+      if (de2 * de2 + dz2 * dz2 < 1 || (Math.abs(x - CHEST_X) < 0.6 && Math.abs(z) < 0.4)) continue;
+      add(x, 0.05, z, 0, 0.5, 0.8, M.GRASS, 0.1, 1, 44); add(x + 0.05, 0.10, z, 0, 0.5, 0.8, M.GRASS, 0.25, 1, 39);
+    }
+    for (var f = 0; f < 14; f++) {
+      var fx = (hr(f * 7.7 + 1) - 0.5) * 5.0, fz = (hr(f * 5.3 + 2) - 0.5) * 2.4;
+      if (Math.abs((fx - ex) / 1.0) < 1 && Math.abs(fz) < 0.5) continue;
+      if (Math.abs(fx - CHEST_X) < 0.65 && Math.abs(fz) < 0.45) continue;
+      add(fx, 0.07, fz, 0, 1, 0.3, f % 3 === 0 ? M.GLOW : f % 3 === 1 ? M.HEART : M.WHITE, 0.4, 1, 42);
+    }
+  }
+
+  var BG_N = 9;
+  function bgFlower(k, t) {
+    var a = k / BG_N * TAU + t * 0.18;
+    return { x: 2.1 * Math.cos(a), z: -3.0 + 1.8 * Math.sin(a), y: 1.5 + 1.5 * hr(k), R: 0.26 + 0.10 * hr(k + 9), type: k % 6, seed: hr(k * 3) * 6.28 };
+  }
+  function buildGarden(t) {
+    for (var k = 0; k < BG_N; k++) {
+      var f = bgFlower(k, t);
+      for (var y = 0; y < f.y - 0.05; y += 0.11) add(f.x, y, f.z, 0, 0, 1, M.BGG, hr(y * 31 + k) * 0.5 - 0.1, 1, 0);
+    }
+  }
+
+  /* ---------- particles ---------- */
+  function spawn(x, y, z, big) {
+    var heart = Math.random() < 0.72;
+    parts.push({ x: x, y: y, z: z, vx: (Math.random() - 0.5) * (big ? 1.6 : 0.7), vy: (big ? 1.4 : 1.0) + Math.random() * (big ? 1.6 : 0.9), vz: (Math.random() - 0.5) * 0.7,
+      age: 0, life: 3 + Math.random() * 1.6, heart: heart, lv: Math.floor(Math.random() * 6), ch: heart ? HEART : (Math.random() < 0.5 ? 42 : 43) });
+  }
+  function stepParticles(t, dt) {
+    if (!burst && t >= T_OPEN) { burst = true; for (var i = 0; i < 42; i++) spawn(CHEST_X + (Math.random() - 0.5) * 0.5, 0.7, (Math.random() - 0.5) * 0.3, true); }
+    if (t > T_OPEN + 0.4) { trickle += dt * 4; while (trickle >= 1) { trickle -= 1; spawn(CHEST_X + (Math.random() - 0.5) * 0.5, 0.7, (Math.random() - 0.5) * 0.3, false); } }
+    for (var j = parts.length - 1; j >= 0; j--) {
+      var p = parts[j]; p.age += dt; p.vy -= 0.55 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+      if (p.age > p.life || p.y < 0) parts.splice(j, 1);
+    }
+  }
+
+  /* ---------- render ---------- */
+  function render(t, dt) {
+    chars.fill(0); zbuf.fill(-1e9); np = 0;
+    var yaw = 0.30 + 0.08 * Math.sin(t * 0.25), tilt = 0.20, CAM = 7, PIV = 1.0;
+    ca = Math.cos(yaw); sa = Math.sin(yaw); ct = Math.cos(tilt); st = Math.sin(tilt);
+    function pj(x, y, z) {
+      var xr = (x - 0.25) * ca - z * sa, zr = (x - 0.25) * sa + z * ca, yp = y - PIV, yt = yp * ct - zr * st, zt = yp * st + zr * ct, f = CAM / (CAM - zt);
+      return [cxs + xr * f * sxs, prow - yt * f * sys, zt, f];
+    }
+    var es = elephantState(t), cs = chestState(t);
+    stepParticles(t, dt);
+    buildGround(es.ex); buildGarden(t); buildChest(t, cs); buildElephant(es, t);
+
+    // background hearts (screen space)
+    for (var h = 0; h < bgHearts.length; h++) {
+      var bh = bgHearts[h]; bh.y -= bh.sp * dt * 0.5; if (bh.y < 0) { bh.y = 1; bh.x = Math.random(); }
+      plot(Math.floor((bh.x + 0.015 * Math.sin(t * 1.2 + bh.ph)) * cols), Math.floor(bh.y * rows), -50, HEART, BGHEART.base + bh.c);
+    }
+    // points
+    for (var i = 0; i < np; i++) {
+      var o = i * F, x = P[o], y = P[o + 1], z = P[o + 2], nx = P[o + 3], ny = P[o + 4], nz = P[o + 5], mat = P[o + 6] | 0, tone = P[o + 7], two = P[o + 8], och = P[o + 9];
+      var q = pj(x, y, z);
+      var nxr = nx * ca - nz * sa, nzr = nx * sa + nz * ca, nyt = ny * ct - nzr * st, nzt = ny * st + nzr * ct;
+      var dot = nxr * LX + nyt * LY + nzt * LZ;
+      if (two && dot < 0) dot = -dot * 0.55;
+      var b = clamp(0.25 + 0.75 * Math.max(0, dot) + tone, 0, 0.999);
+      var pal = PALS[mat], zz = q[2] - (mat === M.BGG ? 6 : 0);
+      plot(Math.floor(q[0]), Math.floor(q[1]), zz, och || SHADE.charCodeAt(Math.floor(b * SH_N)), pal.base + Math.floor(b * pal.n));
+    }
+    // background flower heads
+    for (var k = 0; k < BG_N; k++) {
+      var f = bgFlower(k, t), pf = pj(f.x, f.y, f.z), fx = pf[0], fy = pf[1], zt = pf[2] - 6, ff = pf[3];
+      var rx = f.R * ff * sxs, ry = f.R * ff * sys, npet = DISC[f.type][0], pal2 = BGF[DISC[f.type][1]], rot = f.seed + t * 0.5;
+      for (var rr = Math.floor(fy - ry) - 1; rr <= Math.floor(fy + ry) + 1; rr++) {
+        var dy = (rr + 0.5 - fy) / ry;
+        for (var cc = Math.floor(fx - rx) - 1; cc <= Math.floor(fx + rx) + 1; cc++) {
+          var dx = (cc + 0.5 - fx) / rx, s2 = Math.sqrt(dx * dx + dy * dy);
+          if (s2 > 1) continue;
+          if (s2 < 0.3) { plot(cc, rr, zt + 0.06, s2 < 0.17 ? 64 : 111, BGC.base + Math.min(5, Math.floor((0.55 - 0.35 * dx - 0.35 * dy) * 6))); continue; }
+          var ph = Math.atan2(dy, dx), reach = 0.32 + 0.68 * Math.pow(Math.abs(Math.cos(npet * (ph + rot) / 2)), 0.7);
+          if (s2 > reach) continue;
+          var bb = clamp(0.62 - 0.22 * dx - 0.28 * dy + 0.12 * s2 + (s2 > reach - 0.14 ? -0.22 : 0), 0, 0.999);
+          plot(cc, rr, zt + 0.04 * (1 - s2), '+*#%'.charCodeAt(Math.floor(bb * 4)), pal2.base + Math.floor(bb * pal2.n));
+        }
+      }
+    }
+    // baby's breath
+    for (var bI = 0; bI < 80; bI++) {
+      var ang = hr(bI * 1.9) * TAU + t * 0.12, rad = 1.6 + 1.2 * hr(bI * 3.3), bx = rad * Math.cos(ang), bz = -3.0 + 1.8 * Math.sin(ang), by = 1.2 + 2.0 * hr(bI * 7.7);
+      var pb = pj(bx, by, bz), tw = Math.sin(t * 2 + hr(bI) * 6.28);
+      plot(Math.floor(pb[0]), Math.floor(pb[1]), pb[2] - 6, tw > 0.6 ? 42 : 183, (tw > 0.6 ? SPARK.base + 5 : BGHEART.base) + 0);
+    }
+    // particles
+    for (var pI = 0; pI < parts.length; pI++) {
+      var pa = parts[pI], pp = pj(pa.x, pa.y, pa.z), fade = pa.life - pa.age < 0.7;
+      var ci = pa.heart ? PALS[M.HEART].base + Math.min(5, pa.lv) : SPARK.base + 3 + (pa.lv % 3);
+      if (fade && ((Math.floor(t * 12) + pI) % 2)) continue;
+      plot(Math.floor(pp[0]), Math.floor(pp[1]), pp[2] + 0.5, pa.ch, ci);
+    }
+    // text
+    if (t >= T_TEXT) {
+      var from = pj(CHEST_X, 0.8, 0), cx0 = from[0], cy0 = from[1];
+      for (var ti = 0; ti < textPix.length; ti++) {
+        var tp = textPix[ti], u = (t - T_TEXT - tp.d) / 0.9;
+        if (u <= 0) continue;
+        var e = 1 - Math.pow(1 - clamp(u, 0, 1), 3), col2 = lerp(cx0, tp.tx, e), row2 = lerp(cy0, tp.ty, e) - 5 * Math.sin(Math.PI * e);
+        var done = u >= 1; if (done) { col2 = tp.tx; row2 = tp.ty; }
+        var idx = ((Math.floor(tp.tx * 0.35 - t * 3) % MSGN) + MSGN) % MSGN;
+        plot(Math.floor(col2), Math.floor(row2), 1e5, done ? BLOCK : (ti % 2 ? 42 : 43), MSG + idx);
+      }
+    }
+  }
+
+  function dump() {
+    var out = [];
+    for (var r = 0; r < rows; r++) { var line = ''; for (var c = 0; c < cols; c++) { var ch = chars[r * cols + c]; line += ch ? String.fromCharCode(ch === BLOCK ? 35 : ch === HEART ? 3 : ch) : ' '; } out.push(line); }
+    return out.join('\n');
+  }
+
+  var canvas = typeof document !== 'undefined' && document.getElementById && document.getElementById('c');
+  if (!canvas) { (typeof window !== 'undefined' ? window : globalThis).__ELE = { COL: COL, grid: function () { return { chars: Array.from(chars), colors: Array.from(colors), cols: cols, rows: rows }; }, setup: setup, render: render, dump: dump, reset: reset, T: { T_WALK: T_WALK, T_OPEN: T_OPEN, T_TEXT: T_TEXT, T_DONE: T_DONE } }; return; }
+
+  /* ---------- browser glue ---------- */
+  var stage = document.getElementById('stage'), btn = document.getElementById('replay'), ctx = canvas.getContext('2d');
+  var FONT = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace';
+  var W = 0, H = 0, cw = 8, chh = 16, dpr = 1, fs = 14, offX = 0;
+  var t0 = performance.now(), last = t0, reduce = false;
+  try { reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+  if (reduce) t0 -= (T_DONE + 1) * 1000;
+
+  function resize() {
+    W = stage.clientWidth; H = stage.clientHeight; dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (!W || !H) return;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    fs = clamp(Math.round(W / 60 / 0.6), 9, 13);
+    ctx.font = fs + 'px ' + FONT;
+    cw = ctx.measureText('M').width || fs * 0.6; chh = cw * 2;
+    var c = Math.floor(W / cw), r = Math.floor(H / chh);
+    offX = (W - c * cw) / 2;
+    setup(c, r);
+  }
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    ctx.font = fs + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    var lastc = -1;
+    for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+      var i = r * cols + c, ch = chars[i];
+      if (!ch) continue;
+      var ci = colors[i];
+      if (ci !== lastc) { ctx.fillStyle = COL[ci]; lastc = ci; }
+      if (ch === BLOCK) ctx.fillRect(offX + c * cw, r * chh, cw + 0.6, chh + 0.6);
+      else ctx.fillText(String.fromCharCode(ch), offX + (c + 0.5) * cw, (r + 0.55) * chh);
+    }
+  }
+  function loop(now) {
+    requestAnimationFrame(loop);
+    if (now - last < 32 || !cols) return;
+    var dt = Math.min(0.1, (now - last) / 1000); last = now;
+    var t = (now - t0) / 1000;
+    render(t, dt); draw();
+    btn.hidden = t < T_DONE;
+  }
+  btn.addEventListener('click', function () { t0 = performance.now(); reset(); btn.hidden = true; });
+  if (window.ResizeObserver) new ResizeObserver(resize).observe(stage); else window.addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body></html>
